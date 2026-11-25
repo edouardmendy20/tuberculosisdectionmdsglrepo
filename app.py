@@ -25,6 +25,10 @@ MALADIES = {
     },
 }
 
+# Ordre exact des colonnes catégorielles (comme dans le notebook)
+CAT_COLS = ["job", "marital", "education", "default", "housing",
+            "loan", "contact", "month", "day_of_week", "poutcome"]
+
 
 @st.cache_resource(max_entries=1)
 def load_model(model_path):
@@ -45,6 +49,19 @@ def load_performance():
     return model, scaler
 
 
+@st.cache_resource
+def load_souscription():
+    fichiers = ["DNN_model.h5", "scaler.joblib"] + [f"{c}_encoder.joblib" for c in CAT_COLS]
+    for f in fichiers:
+        if not os.path.exists(f):
+            st.error(f"Fichier introuvable : {f}.")
+            st.stop()
+    model = tf.keras.models.load_model("DNN_model.h5", compile=False)
+    scaler = joblib.load("scaler.joblib")
+    encoders = {c: joblib.load(f"{c}_encoder.joblib") for c in CAT_COLS}
+    return model, scaler, encoders
+
+
 def predict_image(model, image, classes):
     image = image.convert("RGB").resize(IMG_SIZE, Image.NEAREST)
     x = np.asarray(image, dtype=np.float32) / 255.0
@@ -55,14 +72,15 @@ def predict_image(model, image, classes):
 
 def predire_performance(model, scaler, hours, previous, extra, sleep, papers):
     extra_encoded = 1 if extra == "Yes" else 0
-    # Même ordre que df.drop('Performance Index', axis=1)
     X_input = np.array([[hours, previous, extra_encoded, sleep, papers]], dtype=float)
     X_scaled = scaler.transform(X_input)
     return round(float(model.predict(X_scaled, verbose=0)[0][0]), 2)
 
 
 st.title("Démo Deep Learning")
-tab1, tab2 = st.tabs(["🫁 Radiographies", "🎓 Performance élève"])
+tab1, tab2, tab3 = st.tabs(
+    ["🫁 Radiographies", "🎓 Performance élève", "🏦 Souscription"]
+)
 
 # ---------------- Onglet 1 : radiographies ----------------
 with tab1:
@@ -112,5 +130,52 @@ with tab2:
         perf_model, scaler = load_performance()
         resultat = predire_performance(perf_model, scaler, hours, previous, extra, sleep, papers)
         st.metric("Performance Index prédit", resultat)
+
+# ---------------- Onglet 3 : souscription ----------------
+with tab3:
+    st.write("Renseignez les informations du client pour prédire s'il va souscrire.")
+
+    sous_model, sous_scaler, sous_encoders = load_souscription()
+
+    def choix(col, label):
+        return st.selectbox(label, list(sous_encoders[col].classes_), key=f"sous_{col}")
+
+    age = st.number_input("age", value=40, step=1, key="sous_age")
+    job = choix("job", "job")
+    marital = choix("marital", "marital")
+    education = choix("education", "education")
+    default = choix("default", "default")
+    housing = choix("housing", "housing")
+    loan = choix("loan", "loan")
+    contact = choix("contact", "contact")
+    month = choix("month", "month")
+    day_of_week = choix("day_of_week", "day_of_week")
+    duration = st.number_input("duration", value=200, step=1, key="sous_duration")
+    campaign = st.number_input("campaign", value=2, step=1, key="sous_campaign")
+    pdays = st.number_input("pdays", value=999, step=1, key="sous_pdays")
+    previous_c = st.number_input("previous", value=0, step=1, key="sous_previous")
+    poutcome = choix("poutcome", "poutcome")
+
+    if st.button("Prédire la souscription"):
+        vals = {
+            "job": job, "marital": marital, "education": education,
+            "default": default, "housing": housing, "loan": loan,
+            "contact": contact, "month": month,
+            "day_of_week": day_of_week, "poutcome": poutcome,
+        }
+        enc = {c: sous_encoders[c].transform([vals[c]])[0] for c in CAT_COLS}
+        # Même ordre que dans ton Gradio
+        x_new = np.array([
+            age, enc["job"], enc["marital"], enc["education"], enc["default"],
+            enc["housing"], enc["loan"], enc["contact"], enc["month"],
+            enc["day_of_week"], duration, campaign, pdays, previous_c,
+            enc["poutcome"],
+        ], dtype=float).reshape(1, -1)
+        x_new = sous_scaler.transform(x_new)
+        y_pred = np.round(sous_model.predict(x_new, verbose=0))
+        if y_pred[0][0] == 1:
+            st.success("Souscrire")
+        else:
+            st.error("Pas souscrire")
 
 st.caption("DIT & AfriAI Solutions")
