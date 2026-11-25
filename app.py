@@ -25,9 +25,15 @@ MALADIES = {
     },
 }
 
-# Ordre exact des colonnes catégorielles (comme dans le notebook)
-CAT_COLS = ["job", "marital", "education", "default", "housing",
-            "loan", "contact", "month", "day_of_week", "poutcome"]
+CAT_COLS = [
+    "job", "marital", "education", "default", "housing",
+    "loan", "contact", "month", "day_of_week", "poutcome"
+]
+
+CIFAR_CLASSES = [
+    "airplane", "automobile", "bird", "cat", "deer",
+    "dog", "frog", "horse", "ship", "truck"
+]
 
 
 @st.cache_resource(max_entries=1)
@@ -62,6 +68,14 @@ def load_souscription():
     return model, scaler, encoders
 
 
+@st.cache_resource
+def load_cifar():
+    if not os.path.exists("cnn_model.h5"):
+        st.error("Fichier introuvable : cnn_model.h5.")
+        st.stop()
+    return tf.keras.models.load_model("cnn_model.h5", compile=False)
+
+
 def predict_image(model, image, classes):
     image = image.convert("RGB").resize(IMG_SIZE, Image.NEAREST)
     x = np.asarray(image, dtype=np.float32) / 255.0
@@ -77,9 +91,17 @@ def predire_performance(model, scaler, hours, previous, extra, sleep, papers):
     return round(float(model.predict(X_scaled, verbose=0)[0][0]), 2)
 
 
+def predict_cifar(model, image):
+    image = image.convert("RGB").resize((32, 32))
+    image_array = np.array(image, dtype=np.float32) / 255.0
+    image_array = image_array.reshape(1, 32, 32, 3)
+    predictions = model.predict(image_array, verbose=0)[0]
+    return {CIFAR_CLASSES[i]: float(predictions[i]) for i in range(10)}
+
+
 st.title("Démo Deep Learning")
-tab1, tab2, tab3 = st.tabs(
-    ["🫁 Radiographies", "🎓 Performance élève", "🏦 Souscription"]
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["🫁 Radiographies", "🎓 Performance élève", "🏦 Souscription", "🖼️ CIFAR-10"]
 )
 
 # ---------------- Onglet 1 : radiographies ----------------
@@ -92,7 +114,7 @@ with tab1:
     classes = config["classes"]
 
     uploaded_file = st.file_uploader(
-        "Radiographie thoracique", type=["png", "jpg", "jpeg"]
+        "Radiographie thoracique", type=["png", "jpg", "jpeg"], key="radio_uploader"
     )
 
     if uploaded_file is not None:
@@ -133,6 +155,7 @@ with tab2:
 
 # ---------------- Onglet 3 : souscription ----------------
 with tab3:
+    st.subheader("Bank Marketing Prediction")
     st.write("Renseignez les informations du client pour prédire s'il va souscrire.")
 
     sous_model, sous_scaler, sous_encoders = load_souscription()
@@ -140,21 +163,26 @@ with tab3:
     def choix(col, label):
         return st.selectbox(label, list(sous_encoders[col].classes_), key=f"sous_{col}")
 
-    age = st.number_input("age", value=40, step=1, key="sous_age")
-    job = choix("job", "job")
-    marital = choix("marital", "marital")
-    education = choix("education", "education")
-    default = choix("default", "default")
-    housing = choix("housing", "housing")
-    loan = choix("loan", "loan")
-    contact = choix("contact", "contact")
-    month = choix("month", "month")
-    day_of_week = choix("day_of_week", "day_of_week")
-    duration = st.number_input("duration", value=200, step=1, key="sous_duration")
-    campaign = st.number_input("campaign", value=2, step=1, key="sous_campaign")
-    pdays = st.number_input("pdays", value=999, step=1, key="sous_pdays")
-    previous_c = st.number_input("previous", value=0, step=1, key="sous_previous")
-    poutcome = choix("poutcome", "poutcome")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        age = st.number_input("age", value=40, step=1, key="sous_age")
+        job = choix("job", "job")
+        marital = choix("marital", "marital")
+        education = choix("education", "education")
+        default = choix("default", "default")
+        housing = choix("housing", "housing")
+        loan = choix("loan", "loan")
+        contact = choix("contact", "contact")
+
+    with col2:
+        month = choix("month", "month")
+        day_of_week = choix("day_of_week", "day_of_week")
+        duration = st.number_input("duration", value=200, step=1, key="sous_duration")
+        campaign = st.number_input("campaign", value=2, step=1, key="sous_campaign")
+        pdays = st.number_input("pdays", value=999, step=1, key="sous_pdays")
+        previous_c = st.number_input("previous", value=0, step=1, key="sous_previous")
+        poutcome = choix("poutcome", "poutcome")
 
     if st.button("Prédire la souscription"):
         vals = {
@@ -164,18 +192,49 @@ with tab3:
             "day_of_week": day_of_week, "poutcome": poutcome,
         }
         enc = {c: sous_encoders[c].transform([vals[c]])[0] for c in CAT_COLS}
-        # Même ordre que dans ton Gradio
+
         x_new = np.array([
             age, enc["job"], enc["marital"], enc["education"], enc["default"],
             enc["housing"], enc["loan"], enc["contact"], enc["month"],
             enc["day_of_week"], duration, campaign, pdays, previous_c,
             enc["poutcome"],
         ], dtype=float).reshape(1, -1)
+
         x_new = sous_scaler.transform(x_new)
-        y_pred = np.round(sous_model.predict(x_new, verbose=0))
-        if y_pred[0][0] == 1:
-            st.success("Souscrire")
+        proba = float(sous_model.predict(x_new, verbose=0)[0][0])
+        y_pred = int(np.round(proba))
+
+        if y_pred == 1:
+            st.success(f"Souscrire (Probabilité : {proba:.1%})")
         else:
-            st.error("Pas souscrire")
+            st.error(f"Pas souscrire (Probabilité : {proba:.1%})")
+
+# ---------------- Onglet 4 : CIFAR-10 ----------------
+with tab4:
+    st.subheader("Classificateur CIFAR-10")
+    st.write("Téléverse une image pour prédire sa classe parmi les 10 catégories CIFAR-10.")
+
+    cifar_file = st.file_uploader(
+        "Choisir une image...", type=["png", "jpg", "jpeg"], key="cifar_uploader"
+    )
+
+    if cifar_file is not None:
+        cifar_model = load_cifar()
+        image = Image.open(cifar_file)
+        col_img, col_res = st.columns(2)
+        with col_img:
+            st.image(image, caption="Image téléversée")
+        with col_res:
+            with st.spinner("Classification en cours..."):
+                probas = predict_cifar(cifar_model, image)
+            top_4 = sorted(probas.items(), key=lambda x: x[1], reverse=True)[:4]
+            best_class, best_prob = top_4[0]
+            st.success(f"Prédiction : **{best_class}** ({best_prob:.1%})")
+            st.write("Top 4 des probabilités :")
+            for classe, proba in top_4:
+                st.write(f"{classe} : {proba:.1%}")
+                st.progress(proba)
+    else:
+        st.info("Aucune image téléversée pour le moment.")
 
 st.caption("DIT & AfriAI Solutions")
